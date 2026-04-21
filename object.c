@@ -1,4 +1,4 @@
-// object.c — Content-addressable object store
+cat > object.c << 'EOF'
 #include "pes.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -7,8 +7,6 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <openssl/evp.h>
-
-// ─── PROVIDED ────────────────────────────────────────────────────────────────
 
 void hash_to_hex(const ObjectID *id, char *hex_out) {
     for (int i = 0; i < HASH_SIZE; i++)
@@ -47,10 +45,7 @@ int object_exists(const ObjectID *id) {
     return access(path, F_OK) == 0;
 }
 
-// ─── IMPLEMENTED ─────────────────────────────────────────────────────────────
-
 int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out) {
-    // 1. Determine type string
     const char *type_str;
     switch (type) {
         case OBJ_BLOB:   type_str = "blob";   break;
@@ -58,37 +53,30 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
         case OBJ_COMMIT: type_str = "commit"; break;
         default: return -1;
     }
-
-    // 2. Build full object: "<type> <size>\0<data>"
     char header[64];
     int header_len = snprintf(header, sizeof(header), "%s %zu", type_str, len);
     size_t full_len = (size_t)header_len + 1 + len;
-
     uint8_t *full_obj = malloc(full_len);
     if (!full_obj) return -1;
     memcpy(full_obj, header, header_len);
     full_obj[header_len] = '\0';
     memcpy(full_obj + header_len + 1, data, len);
 
-    // 3. Compute SHA-256 of full object
     ObjectID id;
     compute_hash(full_obj, full_len, &id);
 
-    // 4. Deduplication
     if (object_exists(&id)) {
         *id_out = id;
         free(full_obj);
         return 0;
     }
 
-    // 5. Create shard directory
     char hex[HASH_HEX_SIZE + 1];
     hash_to_hex(&id, hex);
     char shard_dir[256];
     snprintf(shard_dir, sizeof(shard_dir), "%s/%.2s", OBJECTS_DIR, hex);
     mkdir(shard_dir, 0755);
 
-    // 6. Write to temp file
     char final_path[512];
     object_path(&id, final_path, sizeof(final_path));
     char tmp_path[520];
@@ -105,14 +93,11 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
     }
     free(full_obj);
 
-    // 7. fsync temp file
     if (fsync(fd) != 0) { close(fd); unlink(tmp_path); return -1; }
     close(fd);
 
-    // 8. Atomic rename
     if (rename(tmp_path, final_path) != 0) { unlink(tmp_path); return -1; }
 
-    // 9. fsync shard directory
     int dir_fd = open(shard_dir, O_RDONLY);
     if (dir_fd >= 0) { fsync(dir_fd); close(dir_fd); }
 
@@ -121,11 +106,9 @@ int object_write(ObjectType type, const void *data, size_t len, ObjectID *id_out
 }
 
 int object_read(const ObjectID *id, ObjectType *type_out, void **data_out, size_t *len_out) {
-    // 1. Build file path
     char path[512];
     object_path(id, path, sizeof(path));
 
-    // 2. Read entire file
     FILE *f = fopen(path, "rb");
     if (!f) return -1;
 
@@ -136,18 +119,15 @@ int object_read(const ObjectID *id, ObjectType *type_out, void **data_out, size_
 
     uint8_t *raw = malloc((size_t)file_size);
     if (!raw) { fclose(f); return -1; }
-
     if (fread(raw, 1, (size_t)file_size, f) != (size_t)file_size) {
         fclose(f); free(raw); return -1;
     }
     fclose(f);
 
-    // 3. Verify integrity
     ObjectID computed;
     compute_hash(raw, (size_t)file_size, &computed);
     if (memcmp(computed.hash, id->hash, HASH_SIZE) != 0) { free(raw); return -1; }
 
-    // 4. Parse header (find '\0')
     uint8_t *null_byte = memchr(raw, '\0', (size_t)file_size);
     if (!null_byte) { free(raw); return -1; }
 
@@ -157,7 +137,6 @@ int object_read(const ObjectID *id, ObjectType *type_out, void **data_out, size_
     memcpy(header, raw, hdr_len);
     header[hdr_len] = '\0';
 
-    // 5. Parse type and size
     char type_str[16];
     size_t data_size;
     if (sscanf(header, "%15s %zu", type_str, &data_size) != 2) { free(raw); return -1; }
@@ -167,7 +146,6 @@ int object_read(const ObjectID *id, ObjectType *type_out, void **data_out, size_
     else if (strcmp(type_str, "commit") == 0) *type_out = OBJ_COMMIT;
     else { free(raw); return -1; }
 
-    // 6. Extract data portion
     uint8_t *data_start = null_byte + 1;
     size_t actual_len = (size_t)file_size - (hdr_len + 1);
     if (actual_len != data_size) { free(raw); return -1; }
@@ -182,3 +160,4 @@ int object_read(const ObjectID *id, ObjectType *type_out, void **data_out, size_
     *len_out = actual_len;
     return 0;
 }
+EOF
