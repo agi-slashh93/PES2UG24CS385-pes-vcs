@@ -14,28 +14,7 @@ PES-VCS is a local version control system built from scratch in C, modelled afte
 
 **`object_read`** reconstructs the file path from the hash, reads the file, recomputes SHA-256 to verify integrity (returns `-1` on mismatch), parses the header to extract type and size, and returns a heap-allocated copy of the data portion.
 
-### Screenshot 1A — `./test_objects` output
 
-```
-Stored blob with hash: d58213f5dbe0629b5c2fa28e5c7d4213ea09227ed0221bbe9db5e5c4b9aafc12
-Object stored at: .pes/objects/d5/8213f5dbe0629b5c2fa28e5c7d4213ea09227ed0221bbe9db5e5c4b9aafc12
-PASS: blob storage
-PASS: deduplication
-PASS: integrity check
-
-All Phase 1 tests passed.
-```
-
-### Screenshot 1B — Sharded object store
-
-```
-$ find .pes/objects -type f
-.pes/objects/25/ef1fa07ea68a52f800dc80756ee6b7ae34b337afedb9b46a1af8e11ec4f476
-.pes/objects/2a/594d39232787fba8eb7287418aec99c8fc2ecdaf5aaf2e650eda471e566fcf
-.pes/objects/d5/8213f5dbe0629b5c2fa28e5c7d4213ea09227ed0221bbe9db5e5c4b9aafc12
-```
-
----
 
 ## Phase 2 — Tree Objects
 
@@ -43,32 +22,7 @@ $ find .pes/objects -type f
 
 **`tree_from_index`** loads the index and calls a recursive helper `write_tree_level(entries, count, prefix, id_out)`. The helper iterates index entries that share a given path prefix. If an entry has no `/` after the prefix it is a direct file and becomes a blob `TreeEntry`. If it has a `/`, the subdirectory name is extracted, a new prefix is formed, and the helper recurses. After processing all entries at a level, `tree_serialize` and `object_write(OBJ_TREE, ...)` persist the tree, and the hash is returned up the call stack.
 
-### Screenshot 2A — `./test_tree` output
 
-```
-Serialized tree: 139 bytes
-PASS: tree serialize/parse roundtrip
-PASS: tree deterministic serialization
-
-All Phase 2 tests passed.
-```
-
-### Screenshot 2B — Raw binary tree object (od hex dump)
-
-```
-$ od -A x -t x1z .pes/objects/34/fb83796d921969e6ba2a0c30dac825ea371b12576ff5709ffb9064f2112da4 | head -20
-000000 74 72 65 65 20 39 38 00 31 30 30 36 34 34 20 66  >tree 98.100644 f<
-000010 69 6c 65 31 2e 74 78 74 00 b4 e7 6a ee 38 85 48  >ile1.txt...j.8.H<
-000020 39 55 7e 5a 31 32 e3 46 ad bf 82 88 ec 2b a8 78  >9U~Z12.F.....+.x<
-000030 f2 cd 91 5d 5c 23 26 af 00 31 30 30 36 34 34 20  >...]\\#&..100644 <
-000040 66 69 6c 65 32 2e 74 78 74 00 e0 0c 50 e1 6a 2d  >file2.txt...P.j-<
-000050 f3 8f 8d 6b f8 09 e1 81 ad 02 48 da 6e 67 19 f3  >...k......H.ng..<
-000060 5f 9f 7e 65 d6 f6 06 19 9f 7f                    >_.~e......<
-```
-
-You can see the ASCII header `tree 98\0`, then the first entry `100644 file1.txt\0` followed by 32 raw bytes of SHA-256 hash, then the second entry similarly.
-
----
 
 ## Phase 3 — Index (Staging Area)
 
@@ -80,37 +34,7 @@ You can see the ASCII header `tree 98\0`, then the first entry `100644 file1.txt
 
 **`index_add`** reads the file contents with `fopen`/`fread`, writes them as a blob via `object_write(OBJ_BLOB, ...)`, calls `lstat` for metadata, and either updates an existing index entry (found via `index_find`) or appends a new one, then calls `index_save`.
 
-### Screenshot 3A — `pes init → pes add → pes status`
 
-```
-$ ./pes init
-Initialized empty PES repository in .pes/
-
-$ echo "hello" > file1.txt && echo "world" > file2.txt
-$ ./pes add file1.txt file2.txt
-$ ./pes status
-Staged changes:
-  staged:     file1.txt
-  staged:     file2.txt
-
-Unstaged changes:
-  (nothing to show)
-
-Untracked files:
-  (nothing to show)
-```
-
-### Screenshot 3B — `cat .pes/index`
-
-```
-$ cat .pes/index
-100644 2cf8d83d9ee29543b34a87727421fdecb7e3f3a183d337639025de576db9ebb4 1776750245 6 file1.txt
-100644 e00c50e16a2df38f8d6bf809e181ad0248da6e6719f35f9f7e65d6f606199f7f 1776750245 6 file2.txt
-```
-
-Human-readable format: octal mode, 64-char SHA-256 hex, mtime (Unix seconds), file size in bytes, relative path.
-
----
 
 ## Phase 4 — Commits and History
 
@@ -118,142 +42,6 @@ Human-readable format: octal mode, 64-char SHA-256 hex, mtime (Unix seconds), fi
 
 **`commit_create`** calls `tree_from_index` to get the root tree hash, attempts `head_read` to get the parent commit (skipped for the first commit by checking the return value), fills a `Commit` struct with the tree hash, parent, author string from `pes_author()`, and `time(NULL)` timestamp, serializes it with `commit_serialize`, writes it with `object_write(OBJ_COMMIT, ...)`, and finally calls `head_update` to atomically advance the branch pointer.
 
-### Screenshot 4A — `pes log` with three commits
-
-```
-$ export PES_AUTHOR="Test User <PESXUG24CS042>"
-$ ./pes commit -m "Initial commit"
-Committed: 04a20ffcc5e7... Initial commit
-$ echo "World" >> file1.txt && ./pes add file1.txt
-$ ./pes commit -m "Add world"
-Committed: ee285927b639... Add world
-$ echo "Goodbye" > bye.txt && ./pes add bye.txt
-$ ./pes commit -m "Add farewell"
-Committed: d250a535da74... Add farewell
-
-$ ./pes log
-commit d250a535da742e4b03949c0c327e25c8707f584e92a5670376eece19813aa2f4
-Author: Test User <PESXUG24CS042>
-Date:   1776750252
-
-    Add farewell
-
-commit ee285927b639848dd2a3fd8e40e89e983bee63185b0aa3c95492d6d5004ec269
-Author: Test User <PESXUG24CS042>
-Date:   1776750252
-
-    Add world
-
-commit 04a20ffcc5e7d46127949f098da62d6bab0fa1d8cf4b1601c8648bf014d1c667
-Author: Test User <PESXUG24CS042>
-Date:   1776750252
-
-    Initial commit
-```
-
-### Screenshot 4B — Object store growth after three commits
-
-```
-$ find .pes -type f | sort
-.pes/HEAD
-.pes/index
-.pes/objects/04/a20ffcc5e7d46127949f098da62d6bab0fa1d8cf4b1601c8648bf014d1c667
-.pes/objects/2c/f8d83d9ee29543b34a87727421fdecb7e3f3a183d337639025de576db9ebb4
-.pes/objects/34/fb83796d921969e6ba2a0c30dac825ea371b12576ff5709ffb9064f2112da4
-.pes/objects/b4/e76aee38854839557e5a3132e346adbf8288ec2ba878f2cd915d5c2326af00
-.pes/objects/ce/ed54744634f312e9a7da9be821ec651ce533d1629bf9dd90608d325e896893
-.pes/objects/d2/50a535da742e4b03949c0c327e25c8707f584e92a5670376eece19813aa2f4
-.pes/objects/e0/0c50e16a2df38f8d6bf809e181ad0248da6e6719f35f9f7e65d6f606199f7f
-.pes/objects/e6/7ed66bcb4a708250a89f315d4d8bb92703343c84df834438880e13a68652bc
-.pes/objects/ee/285927b639848dd2a3fd8e40e89e983bee63185b0aa3c95492d6d5004ec269
-.pes/objects/f5/902ee73b6aa25436f687067fc4cc0cb481cf416740d3c3c3ed6d9c4de7b6c2
-.pes/refs/heads/main
-```
-
-### Screenshot 4C — Reference chain
-
-```
-$ cat .pes/refs/heads/main
-d250a535da742e4b03949c0c327e25c8707f584e92a5670376eece19813aa2f4
-
-$ cat .pes/HEAD
-ref: refs/heads/main
-```
-
----
-
-## Full Integration Test
-
-```
-=== PES-VCS Integration Test ===
-
---- Repository Initialization ---
-Initialized empty PES repository in .pes/
-PASS: .pes/objects exists
-PASS: .pes/refs/heads exists
-PASS: .pes/HEAD exists
-
---- Staging Files ---
-Status after add:
-Staged changes:
-  staged:     file.txt
-  staged:     hello.txt
-
-Unstaged changes:
-  (nothing to show)
-
-Untracked files:
-  (nothing to show)
-
---- First Commit ---
-Committed: bcd1ec1010bd... Initial commit
-
-Log after first commit:
-commit bcd1ec1010bdaac56454afeb2504f49e46a29a7f29fc14b08b59fcf535624373
-Author: Test User <PESXUG24CS042>
-Date:   1776750269
-
-    Initial commit
-
---- Second Commit ---
-Committed: 7e482366f28a... Update file.txt
-
---- Third Commit ---
-Committed: 59e58e2d6686... Add farewell
-
---- Full History ---
-commit 59e58e2d6686897dd332127fc2d44b17270158c8981ec0c09a931883c920a1fb
-Author: Test User <PESXUG24CS042>
-Date:   1776750269
-
-    Add farewell
-
-commit 7e482366f28aeed61a983196cbac36b6239d3c28982913afb3e7822c95e09132
-Author: Test User <PESXUG24CS042>
-Date:   1776750269
-
-    Update file.txt
-
-commit bcd1ec1010bdaac56454afeb2504f49e46a29a7f29fc14b08b59fcf535624373
-Author: Test User <PESXUG24CS042>
-Date:   1776750269
-
-    Initial commit
-
---- Reference Chain ---
-HEAD:
-ref: refs/heads/main
-refs/heads/main:
-59e58e2d6686897dd332127fc2d44b17270158c8981ec0c09a931883c920a1fb
-
---- Object Store ---
-Objects created:
-10
-
-=== All integration tests completed ===
-```
-
----
 
 ## Phase 5 — Branching and Checkout (Analysis)
 
